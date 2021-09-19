@@ -28,25 +28,24 @@ pub fn remove_dir_contents<P: AsRef<Path>>(path: P) -> io::Result<()> {
 /// a symlink to one).
 pub fn ensure_empty_dir<P: AsRef<Path>>(path: P) -> io::Result<()> {
     match std::fs::create_dir(&path) {
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists
-            => remove_dir_contents(path),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => remove_dir_contents(path),
         otherwise => otherwise,
     }
 }
 
 #[cfg(test)]
 mod test {
-    use tempfile::TempDir;
+    use crate::ensure_empty_dir;
     use crate::remove_dir_all;
     use crate::remove_dir_contents;
-    use crate::ensure_empty_dir;
     use std::fs::{self, File};
-    use std::path::PathBuf;
     use std::io;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
 
-    fn expect_failure<T>(k: io::ErrorKind, r: io::Result<T>) -> io::Result<()> {
+    fn expect_failure<T>(k: &[io::ErrorKind], r: io::Result<T>) -> io::Result<()> {
         match r {
-            Err(e) if e.kind() == k => Ok(()),
+            Err(e) if k.contains(&e.kind()) => Ok(()),
             Err(e) => Err(e),
             Ok(_) => Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -61,6 +60,7 @@ mod test {
         file: PathBuf,
     }
 
+    /// Create test setup: t.mkdir/file all in a tempdir.
     fn prep() -> Result<Prep, io::Error> {
         let tmp = TempDir::new()?;
         let ours = tmp.path().join("t.mkdir");
@@ -68,21 +68,36 @@ mod test {
         fs::create_dir(&ours)?;
         File::create(&file)?;
         File::open(&file)?;
-        Ok(Prep { _tmp: tmp, ours, file })
+        Ok(Prep {
+            _tmp: tmp,
+            ours,
+            file,
+        })
     }
 
     #[test]
     fn mkdir_rm() -> Result<(), io::Error> {
         let p = prep()?;
 
-        expect_failure(io::ErrorKind::Other, remove_dir_contents(&p.file))?;
+        expect_failure(
+            {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature="nightly")] {
+                        &[io::ErrorKind::NotADirectory, io::ErrorKind::Other]
+                    } else {
+                        &[io::ErrorKind::Other]
+                    }
+                }
+            },
+            remove_dir_contents(&p.file),
+        )?;
 
         remove_dir_contents(&p.ours)?;
-        expect_failure(io::ErrorKind::NotFound, File::open(&p.file))?;
+        expect_failure(&[io::ErrorKind::NotFound], File::open(&p.file))?;
 
         remove_dir_contents(&p.ours)?;
         remove_dir_all(&p.ours)?;
-        expect_failure(io::ErrorKind::NotFound, remove_dir_contents(&p.ours))?;
+        expect_failure(&[io::ErrorKind::NotFound], remove_dir_contents(&p.ours))?;
         Ok(())
     }
 
@@ -90,10 +105,21 @@ mod test {
     fn ensure_rm() -> Result<(), io::Error> {
         let p = prep()?;
 
-        expect_failure(io::ErrorKind::Other, ensure_empty_dir(&p.file))?;
+        expect_failure(
+            {
+                cfg_if::cfg_if! {
+                    if #[cfg(feature="nightly")] {
+                        &[io::ErrorKind::NotADirectory, io::ErrorKind::Other]
+                    } else {
+                        &[io::ErrorKind::Other]
+                    }
+                }
+            },
+            ensure_empty_dir(&p.file),
+        )?;
 
         ensure_empty_dir(&p.ours)?;
-        expect_failure(io::ErrorKind::NotFound, File::open(&p.file))?;
+        expect_failure(&[io::ErrorKind::NotFound], File::open(&p.file))?;
         ensure_empty_dir(&p.ours)?;
 
         remove_dir_all(&p.ours)?;
